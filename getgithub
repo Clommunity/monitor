@@ -1,0 +1,5 @@
+#!/bin/sh
+
+GH_USER=Clommunity
+GH_REPO=monitor
+NAME=monitor
