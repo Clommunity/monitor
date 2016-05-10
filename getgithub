@@ -3,3 +3,24 @@
 GH_USER=Clommunity
 GH_REPO=monitor
 NAME=monitor
+
+curl "https://codeload.github.com/${GH_USER}/${GH_REPO}/zip/master" > ${GH_REPO}.zip
+unzip ${GH_REPO}.zip 
+cd ${GH_REPO}-master/
+
+PID=$(pidof serf) && {
+	/etc/init.d/serf stop
+	PID=$(pidof serf) && { kill -9 $PID; }
+	make install
+	/etc/init.d/serf start
+} || {
+	make install
+	/etc/init.d/serf start
+}
+cd ..
+rm -rf ${GH_REPO}-master ${GH_REPO}.zip 
+update-rc.d serf defaults
+
+# Update info
+mkdir -p /etc/cloudy
+curl -s https://api.github.com/repos/$GH_USER/$GH_REPO/git/refs/heads/master | grep 'sha'|awk -F':' '{print $2}'|awk -F'"' '{print $2}' > /etc/cloudy/${GH_USER}-${GH_REPO}.sha
