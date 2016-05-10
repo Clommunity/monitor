@@ -14,9 +14,15 @@ start()
 	echo "Start $NAME"
 	NODE_ID=$(cat $NODE_ID_FILE)
 	#echo "Using node id $NODE_ID"
-	TXT="node_id=$NODE_ID"
+	if [ -f "/var/local/cDistro/plug/resources/monitor-aas/common.sh" ] && [ "$(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh enabled)" == "true" ]; then
+	## 
+	TXT="$NODE_ID"
 	TXT+=",einfo="$(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh gather_information synchthing $(cat $CONFIG_FILE)|jq -c .|tr ',' ';')
 	$AVAHIPS publish "$DESCRIBE" $TYPE $PORT "$TXT"
+	else
+	$AVAHIPS publish "$DESCRIBE" $TYPE $PORT $NODE_ID
+	fi
+
 }
 
 stop()

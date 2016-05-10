@@ -14,6 +14,7 @@ install:
 	mkdir -p $(INSTALLDIR)/var/local/cDistro/plug/controllers/	
 	mkdir -p $(INSTALLDIR)/var/local/cDistro/plug/menus/
 	mkdir -p $(INSTALLDIR)/var/local/cDistro/lang/
+	mkdir -p $(INSTALLDIR)/var/local/cDistro/config/
 	mkdir -p $(INSTALLDIR)/etc/init.d/
 	mkdir -p $(INSTALLDIR)/usr/share/avahi-ps/plugs/
 	mkdir -p $(INSTALLDIR)/usr/share/avahi-service/files/
@@ -48,5 +49,6 @@ install:
 	install -m 0755 var/local/cDistro/plug/controllers/cloudyupdate.php $(INSTALLDIR)/var/local/cDistro/plug/controllers/
 	install -m 0755 var/local/cDistro/plug/menus/cloudy.menu.php $(INSTALLDIR)/var/local/cDistro/plug/menus/
 	install -m 0755 var/local/cDistro/lang/*.menus.php $(INSTALLDIR)/var/local/cDistro/lang/
+	install -m 0755 var/local/cDistro/config/global.php $(INSTALLDIR)/var/local/cDistro/config/
 	@echo "Cloudy updated"
 .PHONY: all clean install
