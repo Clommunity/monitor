@@ -1,0 +1,81 @@
+#!/bin/sh
+# Peerstreamer service file
+
+AVAHIPROG=/usr/sbin/avahi-ps
+TYPE="peerstreamer"
+FILEPEERS=/var/run/pspeers.conf
+PSCONTROLLER=/var/local/cDistro/plug/resources/peerstreamer/pscontroller
+PSSHELL=/var/local/cDistro/plug/resources/peerstreamer/ps_shell
+GETINCONF_FILE=/etc/getinconf-client.conf
+PUBLIC_IP=$($AVAHIPROG info ip)
+DEBUG=0
+NAME=$(basename $0|sed -n 's/\(.*\).service/\1/p')
+
+getJSONEinfo() {
+	local PORT
+	$PORT=$1
+	echo $(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh gather_information peerstreamer $PORT | jq -c .)
+}
+
+start() {
+	
+	check #Aturem els inactius
+
+	if [ -s  $FILEPEERS ]
+	then
+
+		cat $FILEPEERS | while read line
+		do
+			port=$(echo $line | cut -d "|" -f1) 
+			description=$(echo $line | cut -d "|" -f7)
+			
+			EINFO="einfo="$(getJSONEinfo $port|tr "," ";")
+
+			$AVAHIPROG publish "$description" "$TYPE" "$port" "$PUBLIC_IP"",""$EINFO"
+		done
+		echo "Start $NAME"
+	else
+		echo "Stop $NAME"
+	fi
+
+	#$AVAHIPROG publish $description $TYPE $port $ip
+}
+
+stop () {
+	port=$1
+	ip=$2		# IP must be our community IP
+	[ $DEBUG ] && echo "stop"
+	[ $DEBUG ] && echo "port: $port"
+	[ $DEBUG ] && echo "IP: $ip"
+	$AVAHIPROG unpublish $TYPE $port $ip
+}
+
+check() {
+	
+	# If pspeers does not exists there are no services to publish
+	[ ! -f $FILEPEERS ] && return
+
+	[ $DEBUG ] && echo "Checking..."
+
+	$PSSHELL check		# Stop and unpublish zombie PS instances
+
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	check)
+		if check
+		then
+			start
+		fi
+		;;
+	*)
+		exit 1
+		;;
+esac
+exit 0

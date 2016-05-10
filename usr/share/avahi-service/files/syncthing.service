@@ -1,0 +1,61 @@
+#!/bin/sh
+#Syncthing file
+
+AVAHIPS=/usr/sbin/avahi-ps
+NAME=$(basename $0|sed -n 's/\(.*\).service/\1/p')
+DESCRIBE="Syncthing instance running"
+TYPE=syncthing
+PORT=22000
+CONFIG_FILE=/opt/syncthing/config/config.xml
+NODE_ID_FILE=/opt/syncthing/node_id
+
+start()
+{
+	echo "Start $NAME"
+	NODE_ID=$(cat $NODE_ID_FILE)
+	#echo "Using node id $NODE_ID"
+	TXT="node_id=$NODE_ID"
+	TXT+=",einfo="$(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh gather_information synchthing $(cat $CONFIG_FILE)|jq -c .|tr ',' ';')
+	$AVAHIPS publish "$DESCRIBE" $TYPE $PORT "$TXT"
+}
+
+stop()
+{
+	echo "Stop $NAME"
+	$AVAHIPS unpublish $TYPE $PORT
+}
+
+check()
+{
+	[ ! -f $CONFIG_FILE ] && return 1
+
+	netstat -nlt | grep ":$PORT" | grep -q LISTEN || return 1
+
+	return 0
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	check)
+		if check 
+		then
+			start
+		else
+			stop
+		fi
+		;;
+	isActive)
+		echo -n "$NAME "
+		check && (echo "UP"; exit 0) || (echo "DOWN";exit 1)
+		;;
+	*)
+		exit 1
+		;;
+esac
+
+exit 0

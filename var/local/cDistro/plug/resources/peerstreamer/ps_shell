@@ -1,0 +1,62 @@
+#!/bin/bash
+# This script simplifies the avahi-ps check process
+
+FILEPEERS=pspeers.conf
+FILEDIR=/var/run/
+PSSCRIPT=/var/local/cDistro/plug/resources/peerstreamer/pscontroller
+AVAHIPROG=/usr/sbin/avahi-ps	# Need this to unpublish malfunctioning PS instances
+TYPE="peerstreamer"
+DEBUG=1
+PUBLIC_IP=$($AVAHIPROG info ip)
+
+check() {
+	cp $FILEDIR/$FILEPEERS $FILEDIR/_$FILEPEERS
+
+	$PSSCRIPT info --no-stop &> /dev/null		# Killing zombie processes and deleting lines from file
+
+	diff $FILEDIR/$FILEPEERS $FILEDIR/_$FILEPEERS | sed '1d' | while read line
+	do
+		# Unpublishing services
+		[ $DEBUG ] && echo "[DEBUG] Unpublishing services..."
+		$AVAHIPROG unpublish $TYPE $(echo $line | cut -d ' ' -f2 | cut -d '|' -f1) $PUBLIC_IP
+
+		[ $DEBUG ] && echo "[DEBUG] $AVAHIPROG unpublish $TYPE $(echo $line | cut -d ' ' -f2 | cut -d '|' -f1) $PUBLIC_IP"
+	done
+
+	# Removing temporal file
+	rm $FILEDIR/_$FILEPEERS
+}
+
+_stop() {
+	port=$1
+
+	$AVAHIPROG unpublish $TYPE $port $PUBLIC_IP
+}
+
+_start() {
+	port=$1
+	description=$2
+	txt=${3:-""}
+	#TXT will come with more information!
+	
+	$AVAHIPROG publish $description $TYPE $port $PUBLIC_IP",$txt"
+}
+
+case $1 in			# Using "case" in case we need other functions in the future
+	"check")
+		shift
+		check $@
+		;;
+	"stop")
+		shift
+		_stop $@
+		;;
+	"start")
+		shift
+		_start $@
+		;;
+	*)
+		echo "Invalid input."
+		exit 1
+		;;
+esac

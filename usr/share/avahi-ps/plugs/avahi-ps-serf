@@ -1,0 +1,634 @@
+#!/bin/bash
+#
+# Faltar editar-lo
+# SERF, els tags només poden tenir un buffer de 512 bytes.
+SERFBIN="/opt/serf/serf"
+SERF_CONFIGFILE="/etc/avahi-ps-serf.conf"
+SERFTAG="services"
+SERFETAG="extraInfo"
+SERFSTATUS="alive"
+LOGFILE="/tmp/avahi-ps-serf.log"
+
+[[ -f $SERF_CONFIGFILE ]] && . $SERF_CONFIGFILE
+
+comprimir() {
+# Compta això no pot tenir més de 512 caracters (510 pq s= ocupa 2 caracters)
+	bzip2 -|base64 -w 0
+}
+descomprimir(){
+	base64 -d -|bunzip2 -
+}
+
+getMyServices() {
+	local lServices
+
+	lServices=$($SERFBIN info -format json|jq -c -M ".tags.${SERFTAG}")
+	[ ! -z "$lServices" -a "$lServices" != "null" ] && echo "$lServices"|sed 's/^"\(.*\)"$/\1/'|descomprimir|sed "s/'/"'"'"/g"|jq -c .[]
+}
+
+getMyEServices() {
+	local lServices
+	
+	lServices=$($SERFBIN info -format json|jq -c -M ".tags.${SERFETAG}")
+	[ ! -z "$lServices" -a "$lServices" != "null" ] && echo "$lServices"|sed 's/^"\(.*\)"$/\1/'|descomprimir|sed "s/'/"'"'"/g"|jq -c .[]
+}
+
+addMyService() {
+	myServices="$(getAllButOneServices $2 $3)"
+	myEServices="$(getAllButOneServices $2 $3 $SERFETAG)"
+	defServices=""
+	defEServices=""
+	for i in $myEServices
+	do
+		defEServices=$i","$defEServices
+	done
+
+	for i in $myServices
+	do 
+		defServices=$i","$defServices
+	done
+	defServices=$defServices$1
+
+	#Updating ETAG
+	if [ ! -z "$4" ]; then
+	        defEServices=$defEServices$4
+	fi
+
+	#Here we need to make sure there is space on the tag
+	#maxLimit=2048b so the tag|compressed size needs to be under
+	#If goes out the limit we need to clear and update
+
+	$SERFBIN tags -set ${SERFTAG}=$(echo "["$defServices"]" | comprimir)
+	$SERFBIN tags -set ${SERFETAG}=$(echo "["$defEServices"]" | comprimir)
+}
+
+updateV() {
+	## This will update the whole V entry
+	## each value can be updated by using updateEValues
+	local _old
+	local _new
+	local values
+
+
+	_old=$1
+	_new=$2
+	values=()
+	values+=($(echo "$_new"|tr "{" " "|tr "}" " "|sed "s/ //g"|sed "s/,/\n/g"))
+	
+	for key in "${values[@]}"
+	 do
+		_old=$(echo "$_old"|jq -c ". + {$key}")
+	 done
+
+	echo "$_old"
+}
+
+updateEValues() {
+	### This function updates last elem of array v with key
+	local arr
+	local key
+	local value
+	local newv
+	local _size
+	local tmpv
+
+	arr=$1
+	key=$2
+	value=$3
+	_size=$(echo "$arr"|jq -c ".v | length")
+	## IS THE _size Really a number? or is there an error?
+	tmpv=()
+	newv=$(lastVWithoutTTime "$arr")
+ 	newv=$(echo "$newv"|jq -c '. + {'$key':'$value'}')
+	#newv=$(echo "$arr" |jq -c '.v['$_size'] + {'$key':'$value'}')
+	tmpv+=($(echo "$arr" |jq -c '.v[]'))
+	ct=0
+	oldv=()
+	while [ "$ct" -lt "$_size" ]; do
+		nott=$(echo "${tmpv[$ct]}"|jq -c .ttime)
+		if [ "$nott" == "null" ]; then
+		nott=""
+		else
+		oldv+=(${tmpv[$ct]})
+		fi
+		let ct+=1
+		
+	done
+	oldv+=($(echo "$newv" | tr "\n" " " | sed "s/ //g"))
+	txt=""
+	for t in "${oldv[@]}"; do
+		if [ -z "$txt" ]
+		then
+		 txt=$t
+		else
+		 txt=$txt","$t
+		fi
+	done
+	
+	tah=$(echo "$arr" | tr "," "\n" | grep -o '"h"'.*)
+	echo "{$tah,"'"v":['$txt']'"}"
+}
+
+remMyService() {
+	myServices="$(getAllButOneServices $1 $2)"
+
+	myEServices="$(getAllButOneServices $1 $2 $SERFETAG)"
+	myES="$(getOneService $1 $2 $SERFETAG)"
+	myES=$(updateEValues "$myES" "ttime" $(date +%s))
+
+	defServices=""
+	defEServices=""
+	for i in $myServices
+	do
+		if [ ! -z "$defServices" ]
+		then 
+			defServices=$i","$defServices
+		else
+			defServices=$i
+		fi
+	done
+	
+	for i in $myEServices
+	do
+		if [ ! -z "$defEServices" ]
+		then
+			defEServices=$i","$defEServices
+		else
+			defEServices=$i
+		fi
+	done
+	if [ ! -z "$defEServices" ]; then
+	 defEServices=$defEServices","$myES
+	 else
+	 defEServices=$myES
+	fi
+
+	[ -z "$defEServices" ] && $SERFBIN tags -delete ${SERFETAG} || $SERFBIN tags -set ${SERFETAG}=$(echo "["$defEServices"]" | comprimir)
+	[ -z "$defServices" ] && $SERFBIN tags -delete ${SERFTAG} || $SERFBIN tags -set ${SERFTAG}=$(echo "["$defServices"]" | comprimir)
+}
+
+existService(){
+	local _Type
+	local _Desc
+	local _MCloud
+	local _Ip
+	local _Port
+	local _Device
+	local _TXT
+
+	_Type=$1
+	_Desc=$2
+	_MCloud=$3
+	_Ip=$4
+	_Port=$5
+	_Device=$6
+	_TXT=$7
+
+	echo $(getMyServices | grep '"s":"'$_Type'"'.*'""p":"'$_Port'"')
+
+}
+
+existEService(){
+	local _Type
+        local _Port
+        local _value
+
+        _Type=$1
+        _Port=$2
+        echo $(getMyEServices | grep '"h":"'$_Type'_'$_Port'"')
+}
+
+setToMyServices(){
+	local _Type
+	local _Desc
+	local _MCloud
+	local _Ip
+	local _Port
+	local _Device
+	local _TXT
+	
+	# Adding new information
+	local _Extra
+	local _EInfo
+
+	_Type=$1
+	_Desc=$2
+	_MCloud=$3
+	_Ip=$4
+	_Port=$5
+	_Device=$6
+	_TXT=$7
+	_EInfo=${8}
+  # En comptes de borrar el que hi hagi per el que entri potser primer mirar si el que volem posar és exactament igual a un existent.....
+	myService=$(existService "$_Type" "$_Desc" "$_MCloud" "$_Ip" "$_Port" "$_Device" "$_TXT")
+
+	#Adding new content to ETAG
+	myEService=$(existEService "$_Type" "$_Port")
+	if [ -z "$myEService" ]; then
+		myEService="{}"
+	fi
+
+	# IF no EINFO maybe we need to retreive last v without ttime
+	tt=$(lastVWithoutTTime "$myEService")
+	if [ -z "$_EInfo" ]; then
+	 _EInfo=$tt
+	fi
+
+	if [ ! -z "$tt" ]; then
+	  _EInfo=$(updateV "$_EInfo" "$tt")
+	  _EInfo=$(updateEService "$myEService" "$_EInfo" "$_Type" "$_Port")
+	else
+	  _EInfo=$(updateEService "$myEService" "$_EInfo" "$_Type" "$_Port" "true")
+	fi
+
+	#Adding the Extra Tag
+	_Extra="\"h\":\""$_Type"_"$_Port"\""
+	_Extra=$(echo $_Extra",\"v\":["$_EInfo"]")
+	[ -z "$myService" ] && {
+		addMyService "{'s':'$_Type','d':'$_Desc','m':'$_MCloud','i':'$_Ip','p':'$_Port','e':'$_Device','t':'$_TXT'}" "$_Type" "$_Port" "{$_Extra}"
+	}
+
+}
+
+lastVWithoutTTime() {
+	local _h
+	local _v
+	local ttime
+	
+	_h=$1
+	_v=($(echo "$_h"|jq -c ".v[]"))
+	_last=""
+	for i in "${_v[@]}"
+	do
+	ttime=$(echo "$i"|jq -c ".ttime")
+	if [ "$ttime" == 'null' ]; then
+		_last=$i
+	fi
+	done
+	echo $_last
+}
+
+updateEService() {
+	local _old
+	local _new
+	local _type
+	local _port
+	local _tmp
+	local _tf
+
+	_old=$1
+	_new=$2
+	_type=$3
+	_port=$4
+	_tf=${5:-""}
+	#Update is done by removing last V value and adding the new
+	# if ttime
+	_tmp=$(echo "$_old"|grep -P '"h":"'$_type'_'$_port'"*,'| jq -c .v[])
+	if [ -z "$_tmp" ]; then
+	  echo $_new
+	  return
+	fi
+
+	_tmp=($_tmp)
+	if [ ! -z "$_tf" ]; then
+	 n=$(( ${#_tmp[@]} ))
+	else
+	 n=$(( ${#_tmp[@]} - 1 ))
+	fi
+
+	if (( "$n" <= 0 )); then
+	_tmpstr=$_tmp
+	else
+	_tmpstr=""
+	fi
+
+	#making sure it will pass
+	if (( "$n" < 0 )); then
+	n="0"
+	fi
+
+	for (( i=0; i<=${n}; i++ )); do
+	 nott=$(echo "${_tmp[$i]}"|jq -c .ttime)
+	 if [ "$nott" == "null" ]; then
+	 nott=""
+	 else
+	 if [ -z "${_tmp[$i]}" ]; then
+		continue
+	 fi
+	 if [ ! -z "$_tmpstr" ]; then
+	  _tmpstr=$_tmpstr","${_tmp[$i]}
+  	 else
+	  _tmpstr=${_tmp[$i]}
+	 fi
+	 fi
+	done 
+	_tmpstr=$_tmpstr
+	iftxt=$(echo "$_new" | jq -c .)
+
+	if [ ! -z "$iftxt" ]; then
+	 echo $_tmpstr","$iftxt
+	else
+	 echo $_tmpstr
+	fi
+}
+
+vContainsTTime() {
+	local _v
+	local _ttime
+	
+	_ttime="ttime"
+	_v=$1
+
+	echo $_v | jq -c ".$_ttime" 
+	
+
+}
+
+getOneService() {
+	local _Type
+	local _Port
+
+	_Type=$1
+	_Port=$2
+	_EServ=${3:-""}
+
+	if [ ! -z "${_EServ}" ]
+	then
+	getMyEServices | grep '"h":"'$_Type'_'$_Port'"'
+	else
+	getMyServices | grep '"s":"'$_Type'"'.*'"p":"'$_Port'"' 
+	fi
+}
+
+getAllButOneServices() {
+	local _Type
+	local _Port
+	local _EServ
+
+	_Type=$1
+	_Port=$2
+	_EServ=${3:-""}
+
+	if [ ! -z "${_EServ}" ]
+	then
+	getMyEServices | grep -v '"h":"'$_Type'_'$_Port'"'
+	else
+	getMyServices | grep -v '"s":"'$_Type'"'.*'"p":"'$_Port'"' 
+	fi
+}
+
+serf_add_service(){
+
+	local _TXT
+	local Service
+	local Desc
+	local _etag
+
+	_TXT=$(echo "$4"|tr "&" " ")
+	Service=$2
+	Desc=$(echo $1|sed 's/ /_/g')
+	_etag=$5
+
+	setToMyServices "$Service" "$Desc" "${NODENAME}.${CLOUD_NAME}.local" "${PUBLIC_IP}" "$3" "$DEVICE_NAME" "$_TXT" "$_etag"
+
+}
+
+serf_rem_service(){
+
+	local Service
+	local Port
+
+	Service=$1
+	Port=$2
+
+	[ ! -z "$(getOneService $1 $2)" ] && remMyService "$Service" "$Port"
+}
+
+
+# Find 
+serf_find_(){
+	local defServices
+
+	defServices=""
+	myServices=$($SERFBIN members -status=$SERFSTATUS -format json|jq -c -M ".members[].tags.${SERFTAG}"|sed 's/^"\(.*\)"$/\1/'|grep -v "^null$"|descomprimir|sed "s/'/"'"'"/g"|jq -c -M .[])
+
+	for i in $myServices
+	do
+		if [ ! -z "$defServices" ]
+		then 
+			defServices=$i","$defServices
+		else
+			defServices=$i
+		fi
+	done
+	echo "[$defServices]"
+}
+
+serf_publish_service() {
+	local _DESCRIBE
+	local _TYPE
+	local _PORT
+	local _TXT
+
+	if [ $# -lt 3 ]
+	then
+		avahi-ps-help
+	fi
+
+	_DESCRIBE="$1"
+	_TYPE="$2"
+	_PORT="$3"
+	_TXT=${4:-""}
+	## New info added
+
+	## TXT contains einfo at any position
+	if [ ! -z "${_TXT}" ]; then
+		einfo=$(containsEinfo "$_TXT")
+		if [ ! -z "${einfo}" ]; then
+
+		_tmparr=($(echo "${einfo}" | tr "," "\n"))
+		_values=()
+		_tmparr2=(`echo "$_tmparr" | tr "=" "\n"`)
+		_values+=(${_tmparr2[1]})
+		_EInfo=$(echo "${_values[0]}" | tr ';' ',')
+		## clearing TXT of einfo
+		_TXT=$(clearEinfo "$_TXT")
+		fi
+	fi
+	serf_add_service "$_DESCRIBE" "$_TYPE" "$_PORT" "$_TXT" "$_EInfo"
+}
+
+containsEinfo() {
+	#Looks for the einfo= variable and returns it
+	#or empty if not found
+	local _txt
+	p="einfo="
+	_txt=$1
+
+	ret=""
+	if [ ! -z "$_txt" ]; then
+		if [[ "$_txt" =~ .*"$p".* ]]; then
+		ret=$(echo "$_txt"|sed "s/\s\+//g"|tr "," "\n"|grep "$p")
+		fi
+	fi
+
+	echo "$ret"
+}
+
+clearEinfo() {
+	#Clears the einfo=* variable returning all else
+	local _txt
+	_txt=$1
+	_tmparr=($(echo $_txt|sed "s/\s\+//g"|tr "," "\n"))
+	_values=""
+	for x in "${_tmparr[@]}"
+	do
+		if [ -z $(containsEinfo "$x") ]; then
+		_values+="$x"","
+		fi
+	done
+	if [ -z "$_values" ]; then
+	 #just patching up things :)
+	 #because return is made with -last char
+	 _values=" "
+	fi
+	echo "${_values::-1}"
+}
+
+serf_unpublish_service(){
+	local _TYPE
+	local _PORT
+
+	if [ $# -lt 2 ]
+	then
+		avahi-ps-help
+	fi
+	_TYPE="$1"
+	_PORT=$2
+	serf_rem_service $_TYPE $_PORT 
+}
+
+serf_search_service(){
+
+
+	local _SERVICE
+	local _HOST
+	if [ -z "$1" -o "$1" == "." ]
+	then 
+		_SERVICE=".*"
+	fi
+	if [ -z "$2" -o "$2" == "." ]
+	then
+		_HOST=".*\.$CLOUD_NAME\.local"
+	else
+		_HOST="$2\.$CLOUD_NAME\.local"
+	fi
+	serf_find_ "$_SERVICE" "$_HOST"
+
+}
+
+serf_update_service() {
+	#TO update the ETAG of a service
+	# Type PORT UPDATE OPTIONAL_ITEMS
+	local _TYPE
+	local _PORT
+	local _OPT
+	local _UPD
+
+	_TYPE=$1
+	_PORT=$2
+	_UPD=$3
+	_OPT=${4:-""}
+
+	u=$(searchV "$_TYPE" "$_PORT" "$_OPT")
+	if [ -z "$u" ]; then
+	 #None was found! so quit?
+	 return 1
+	fi
+	old=$(allButOneV $(echo $(getOneService $_TYPE $_PORT $SERFETAG)|jq -c .v) "$u")
+
+	h=$(updateV "$u" "$_UPD")
+	if [ -z "$old" ]; then
+	 comb='{"h":"'$_TYPE'_'$_PORT'","v":['"$h"']}'
+	else
+	 comb='{"h":"'$_TYPE'_'$_PORT'","v":['"$old"','"$h"']}'
+	fi
+
+	old=$(getAllButOneServices $_TYPE $_PORT $SERFETAG)
+	defEServices=""
+        for i in $old
+        do
+           defEServices=$i","$defEServices
+        done
+	if [ ! -z "$defEServices" ]; then
+	 defEServices=$defEServices$comb
+	else
+	 defEServices=$comb
+	fi
+	$SERFBIN tags -set ${SERFETAG}=$(echo "["$defEServices"]" | comprimir)
+}
+
+allButOneV() {
+	local _v
+	local _n
+	# Gives all in _v except _n
+
+	_v=($(echo "$1"|jq -c .[]))
+	_n=$2
+	ret=""
+
+	for i in "${_v[@]}"
+	do
+	 #because if _v is empty after taking _n than
+	 if [ "$ret" == "," ]; then ret=""; fi
+	 ret+=$(echo "$i" | grep -v "$_n")","
+	done
+
+	echo "${ret::-1}"
+}
+
+searchV() {
+	#Searching for any of either _TYPE _PORT OR ANY OF _OPTS
+	# its an or not an and !!!!
+	local _v
+	local _TYPE
+	local _PORT
+	local _OPTS
+
+	_TYPE=$1
+	_PORT=$2
+	myES=$(getOneService $_TYPE $_PORT $SERFETAG)
+	_v=()
+	_v+=($(echo "$myES"| jq -c .v[]))
+	_OPTS=${3:-""}
+
+	ret=""
+	for i in "${_v[@]}"
+	do
+	 tmp=$(echo $i|jq -c ".service"|sed 's/\"//g')
+	 tmp2=$(echo $i|jq -c ".port"|sed 's/\"//g')
+	 if [ "$tmp" == "$(echo "$_TYPE"|sed 's/\"//g')" ] || [ "$(echo "$_PORT"|sed 's/\"//g')" == "$tmp2" ]; then
+	  ret=$i
+	 fi
+         #Assuming _OPTS comes in json
+	if [ ! -z "$_OPTS" ]; then
+	 keys=($(echo "$_OPTS"|jq "keys | .[]"))
+	 for b in "${keys[@]}"
+	 do
+	  #clear what we had!
+	  ret=""
+	  tmp=$(echo $i|jq -c "."$b)
+	  tmp2=$(echo "$_OPTS"|jq "."$b)
+	  if [ $(echo "$tmp"|sed 's/\"//g') == $(echo "$tmp2"|sed 's/\"//g') ]; then
+		echo "$i"
+		return
+		#no need for more we have found it!
+	  fi
+	 done
+	fi
+	done
+
+	#If all goes well this returns the one we want according to type or port
+	# or empty if OPTS not found
+	echo "$ret"
+}

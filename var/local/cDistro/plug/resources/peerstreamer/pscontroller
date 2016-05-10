@@ -1,0 +1,533 @@
+#!/bin/bash
+VLCUSER=${VLCUSER:-"nobody"}
+PSUSER=${PSUSER:-$VLCUSER}
+FFMPEGUSER=${PSUSER:-$VLCUSER}
+VLCPATH="/usr/bin/vlc"
+PSPROG="streamer-udp-grapes-static"
+PSPATH="/opt/peerstreamer/"
+AVCONV="/usr/bin/avconv"
+LOGFILE="/dev/null"
+FILEPEERS="/var/run/pspeers.conf"
+SHELL=/var/local/cDistro/plug/resources/peerstreamer/ps_shell
+FILEDIR="/var/run/"
+LSOF="/usr/bin/lsof"
+CURL="/usr/bin/curl"
+PEERSTREAMERBIN="https://raw.githubusercontent.com/Clommunity/build-peerstreamer/master/bin/"
+DEBUG=0
+S='|' # Char Separator
+
+
+doHelp(){
+	echo "Use $0 <publish|unpublish|connectrtsp|connectudp|disconnect|info>:"
+	echo "	publish <urlstream> <port> [Device] [Description]"
+	echo "	unpublish <port>"
+	echo "	connectrtsp <ip> <port> [Port RTSP Server] [IP RTSP Server] [Device]"
+	echo "	connectudp <ip> <port> [IP UDP Server] [Port UDP Server] [Device]"
+	echo "	disconnect <port>"
+	echo "	install"
+	echo "	info [json]"
+	return
+}
+
+doDebug(){
+	[ $DEBUG -eq 1 ] && echo "[DEBUG]:$@"
+}
+
+checkPrograms() {
+	[ ! -f $LSOF ] &&
+		{
+			echo "Need lsof in '"$LSOF"'"
+			echo "Maybe you need execute 'apt-get install lsof'"
+			exit
+		}
+	[ ! -f $VLCPATH ] &&
+		{
+			echo "Need vlc in '"$VLCPATH"'"
+			echo "Maybe you need execute 'apt-get install vlc'"
+			exit
+		}
+
+	[ ! -f $PSPATH$PSPROG ] &&
+		{
+			echo "Need PeerStreamer in '"$PSPATH$PSPROG"'"
+			echo "Install a PeerStreamer compatible version with your hardware"
+			exit
+		}
+
+	[ ! -f $AVCONV ] &&
+        {
+            echo "Need Libav in '"$AVCONV"'"
+            echo "Maybe you need to execute 'apt-get install libav-tools'"
+            exit
+        }
+
+}
+
+saveInfoPeer(){
+	local pidvlc=${1:-""}
+	local pidps=${2:-""}
+	local port=${3:-""}
+	local udpport=${4:-""}
+	local kind=${5:-""}
+	local others=${6:-""}
+	local description=${7:-"NoDescription"} # required only if kind=Source
+		
+	[ -z "$pidvlc" -o -z "$pidps" -o -z "$port" -o -z "$udpport" -o -z "$kind" ] && return
+	doDebug "saveInfoPeer: $@"
+	[ ! -f $FILEPEERS ] && {
+		doDebug "$FILEPEERS don't exist, now is creating."
+		touch $FILEPEERS
+	}
+
+	# Writing Description only if kind=source, though in a future we may write it anyways
+	[ $kind=="Source" ]&& (
+		doDebug "Writing description..."
+		echo "$port$S$pidvlc$S$pidps$S$udpport$S$kind$S$others$S$description" >> $FILEPEERS
+	) ||(
+		echo "$port$S$pidvlc$S$pidps$S$udpport$S$kind$S$others" >> $FILEPEERS
+	)
+
+}
+
+removeInfoPeer(){
+	local port=${1:-""}
+	[ -z "$port" ] && return
+
+	cat $FILEPEERS | grep -v ^${port}$S > ${FILEPEERS}.temp
+	rm $FILEPEERS
+	mv ${FILEPEERS}.temp $FILEPEERS
+
+}
+
+getInfoPeer(){
+	local port=${1:-""}
+
+	[ -z "$port" ] && return
+
+	cat $FILEPEERS | grep ^${port}$S
+
+}
+
+doInfo(){
+
+	local json=${1:-""}
+	local procesos=($(cat $FILEPEERS))
+	local ofs
+	local auxline
+	local notFirst
+
+	notFirst=false
+	[ "$json" == "json" ] && echo "[";
+	for auxline in ${procesos[@]};
+	do
+		ofs=$IFS
+		IFS=$S read -a data <<< "$auxline"
+		IFS=$ofs
+
+		# Checking if current PS instance is active. Otherwise we kill the depending processes.
+		if [ -z "$(ps -A | grep ${data[2]})" ] # If process is not running:
+		then
+			[ ${data[1]} != 0 ] && kill -9 ${data[1]} # Killing vlc process
+			#Stopping avahi service for current instance
+			[ "$json" != "--no-stop"  ] && $SHELL 'stop' ${data[0]}
+			#Deleting current peerstreamer instance from the info file.
+			identifier=${data[1]}"|"${data[2]}
+			echo $identifier
+			sed "/$identifier/d" "$FILEPEERS" > "$FILEDIR/tmp" && mv "$FILEDIR/tmp" $FILEPEERS
+			[[ ! -s $FILEPEERS ]] && rm $FILEPEERS # Deleting filepeers if empty
+		else
+			if [ "$json" == "json" ]
+			then
+				if $notFirst ; then  echo ','; fi
+				echo '{ "port" : '${data[0]}', "type": "'${data[4]}'", "vlcpid": '${data[1]}', "peerstreamerpid": '${data[2]}', "internalport": '${data[3]}', "other": "'${data[5]}'" }'
+				notFirst=true
+			elif [ "$json" = "avahi" ]
+			then
+				# Must return a string with required info for avahi
+				echo "${data[6]} peerstreamer ${data[0]}"
+			else
+				case ${data[4]} in
+					"Source")
+						echo "Source from '"${data[5]}"'"
+						echo "	In port ${data[0]}."
+						echo "	Internal publish UDP 127.0.0.1:${data[3]}."
+						echo "	VLC pid ${data[1]}."
+						echo "	PeerStreamer pid ${data[2]}."
+						;;
+					"PeerUDP")
+						echo "Peer in port ${data[0]}"
+						echo "	To UDP Server in ${data[5]}."
+						echo "	PeerStreamer pid ${data[2]}."
+						;;
+					"PeerRTSPServer")
+						echo "Peer in port ${data[0]}"
+						echo "	To RTSP Server in ${data[5]}."
+						echo "	Internal UDP Port ${data[3]}."
+						echo "	VLC pid ${data[1]}."
+						echo "	PeerStreamer pid ${data[2]}."
+						;;
+				esac
+			fi
+		fi
+	done
+	[ "$json" == "json" ] && echo "]";
+}
+
+checkPIDs() {
+
+	[ -z  ]
+}
+
+# Function peer-soucer
+doPeerSource(){
+	# Source
+	local urlstream="${1:-""}"
+	local port=${2:-""}
+	local device=${3:-"eth0"}
+	local description=${4:-"NoDescription"}
+	local stream_type=$(echo $urlstream | cut -d":" -f1)
+
+	[ -z "$urlstream" -o -z "$port" ] && {
+		echo "Use publish <urlstream> <port> [Device] [Description]"
+		return
+	}
+	udpport=$(findRandFreePort)
+	doDebug "Port to upd local: $udpport"
+
+	# Parsing URL
+	urlstream="$(echo "$urlstream" | sed 's/\,/ /g')"
+
+	if [ $stream_type == "rtmp" ]
+	then
+		# Calling rtmp
+		# For the time being, this is a very VERY harcoding: @FIXME
+		doDebug 'avconv -i "'$urlstream'" -vcodec copy -acodec copy -bsf h264_mp4toannexb -f mpegts udp://127.0.0.1:'$udpport' &'
+		$AVCONV -i "$urlstream" -vcodec copy -acodec copy -bsf h264_mp4toannexb -f mpegts udp://127.0.0.1:$udpport &
+		pidavconv=$!
+		doDebug "PID from ffmpeg is $pidavconv"
+
+		$PSPATH$PSPROG -f null,chunkiser=udp,port0=$udpport,addr=127.0.0.1 -P $port -I $device > $LOGFILE 2>&1 &
+		pidps=$!
+		doDebug "PID from peerstreamer is $pidps"
+
+		# doDebug "Execute: $cmd"
+		# pidps=$(eval $cmd)
+		# doDebug "PID from PeerStreamer is $pidps."
+
+		# Reencoding URL
+		urlstream="$(echo "$urlstream" | sed 's/\ /,/g')"
+		
+		saveInfoPeer $pidavconv $pidps $port $udpport "Source" "$urlstream" "$description"
+
+		return
+	else
+		cmd='su '$VLCUSER' --shell=/bin/sh -c "{ '$VLCPATH' -I dummy \"'$urlstream'\" --sout=\"#standard{access=udp,mux=ts,dst=127.0.0.1:'$udpport'}\" > '$LOGFILE' 2>&1 & }; echo \$!"'
+		doDebug "Execute: $cmd"
+		pidvlc=$(eval $cmd)
+		doDebug "PID from VLC is $pidvlc."
+
+		cmd='su '$PSUSER' --shell=/bin/sh -c "{ '$PSPATH$PSPROG' -f null,chunkiser=udp,port0='$udpport',addr=127.0.0.1 -P '$port' -I '$device' > '$LOGFILE' 2>&1 & }; echo \$!"'
+		doDebug "Execute: $cmd"
+		pidps=$(eval $cmd)
+		doDebug "PID from PeerStreamer is $pidps."
+
+		saveInfoPeer $pidvlc $pidps $port $udpport "Source" "$urlstream" "$description" "$stime"
+		return
+	fi
+}
+
+# Stop peers
+doStopPeerSource(){
+	local port=${1:-""}
+
+	[ -z "$port" ] && {
+		echo "Use unpublish <port>"
+		return
+	}
+
+	datosPeer=$(getInfoPeer $port)
+	doDebug "Get information: '"$datosPeer"'"
+	[ -z "$datosPeer" ] && {
+		echo "This port ($port) doesn't exist in $FILEPEERS."
+		return
+	}
+	pidvlc=$(echo $datosPeer|cut -d "$S" -f 2)
+	[ $pidvlc -ne 0 ] && {
+		doDebug "Kill VLC: $pidvlc"
+		kill -9 $pidvlc
+	}
+	pidps=$(echo $datosPeer|cut -d "$S" -f 3)
+	[ $pidps -ne 0 ] && {
+		doDebug "Kill PeerStreamer: $pidps"
+		kill -9 $pidps
+	}
+	removeInfoPeer $port
+	return
+
+}
+
+# Function peer-with-udp-client
+doPeer2UDPClient(){
+	# Server UDP
+	local ippeersource=${1:-""}
+	local port=${2:-""}
+	local ipclient=${3:-"127.0.0.1"}
+	local udpport=${4:-""}
+	local device=${5:-"eth0"}
+
+	#Checking software
+	if isInstall
+	then
+		[ -z "$ippeersource" -o -z "$port" ] && {
+			echo "Use connectudp <ip> <port> [IP UDP Server] [Port UDP Server] [Device]"
+			return
+		}
+		[ -z "$udpport" ] && udpport=$(findRandFreePort)
+		doDebug "Port to upd local: $udpport"
+
+		# Checking if already connected to this stream
+		# check=$(cat $FILEPEERS | grep -e "^$port")
+		# if [ -z "$check" ] #If there is no line with first parameter equal to $port then proceed with:
+		[ "$(cat $FILEPEERS | grep $port | cut -d '|' -f1)" != "$port" ] && (
+			doDebug "Port is free, creating stream."
+			cmd='su '$PSUSER' --shell=/bin/sh -c "{ '$PSPATH$PSPROG' -i '$ippeersource' -p '$port' -P '$port' -F null,dechunkiser=udp,port0='$udpport',addr='$ipclient' -I '$device' > '$LOGFILE' 2>&1 & }; echo \$!"'
+			doDebug "Execute: $cmd"
+			pidps=$(eval $cmd)
+			doDebug "PID from PeerStreamer is $pidps."
+
+			doDebug "VLC is not necessary."
+
+			saveInfoPeer "0" $pidps $port $udpport "PeerUDP" "udp://@$ipclient:$udpport"
+
+			#Publishing service in avahi network
+			$SHELL "start" $port "Republishing" $(moreInfo $udpport)
+
+			return
+    	)
+		#else
+		#	doDebug "The port $port is already in use. Stream will not create."
+		#	return 1
+		#fi
+	fi
+	#If this point is reached, requiered software is not installed
+	doDebug "Peerstreamer is not installed, aborting connection."
+}
+# Funciton peer-with-rtsp-server
+doPeer2RTSPServer(){
+	# Server RTSP
+	local ippeersource=${1:-""}
+	local port=${2:-""}
+	local udpport=${3:-""}
+	local ipserver=${4:-""}
+	local device=${5:-"eth0"}
+
+	if [[ isInstall && isInstalledVLC ]]
+	then
+		[ -z "$ippeersource" -o -z "$port" ] && {
+			echo "Use connectrtsp <ip> <port> [Port RTSP Server] [IP RTSP Server] [Device]"
+			return
+		}
+
+		# Checking if exists a previous PS instance with same port (source)
+		[ "$(cat $FILEPEERS | grep $port | cut -d '|' -f1)" != "$port" ] && (
+			[ -z "$udpport" ] && udpport=$(findRandFreePort)
+			doDebug "Port to upd local: $udpport"
+
+			cmd='su '$PSUSER' --shell=/bin/sh -c "{ '$PSPATH$PSPROG' -i '$ippeersource' -p '$port' -P '$port' -F null,dechunkiser=udp,port0='$udpport',addr=127.0.0.1 -I '$device' > '$LOGFILE' 2>&1 & }; echo \$!"'
+			doDebug "Execute: $cmd"
+			pidps=$(eval $cmd)
+			doDebug "PID from PeerStreamer is $pidps."
+
+			cmd='su '$VLCUSER' --shell=/bin/sh -c "{ '$VLCPATH' -I dummy udp://@127.0.0.1:'$udpport' --sout=\"#rtp{sdp=rtsp://'$ipserver':'$udpport'/} --sout-keep\" > '$LOGFILE' 2>&1 & }; echo \$!"'
+			doDebug "Execute: $cmd"
+			pidvlc=$(eval $cmd)
+			doDebug "PID from VLC is $pidvlc."
+
+
+			saveInfoPeer $pidvlc $pidps $port $udpport "PeerRTSPServer" "rtsp://$ipserver:$udpport/"
+
+			#Publishing service in avahi network
+			$SHELL "start" $port "Republishing" $(moreInfo $udpport)
+			return
+		)
+	else
+		doDebug "Requiered software (Peerstreamer, VLC) are not installed, aborting connection."
+	fi
+
+}
+moreInfo() {
+	#Adding more info?
+	local port
+
+	port=$1
+
+	if [ -f "/var/local/cDistro/plug/resources/monitor-aas/common.sh" ];
+	then
+	# common.sh now handles the information
+	echo "einfo="$(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh gather_information peerstreamer $port | tr ',' ';')
+	else
+	#### only if avahi_extra is true
+	echo ""
+	fi
+}
+
+# Install PeerStreamer from source
+doInstall() {
+	# VLC packages installation---
+	# Checking if VLC is already installed
+	if isInstalledVLC
+	then
+		#If not, we install the vlc-nox
+		doDebug "Installing vlc-nox..."
+		apt-get install -y --force-yes vlc-nox
+	fi  
+    
+	if isInstalledLibav
+	then
+		doDebug "Installing libav-tools"
+		apt-get install -y --force-yes libav-tools
+    fi
+	if isInstall 
+	then
+		echo "PeerStreamer is already installed."
+	else
+		[ ! -d $PSPATH ] && {
+			doDebug "Peer Streamer directory ($PSPATH) does not exist."
+			mkdir -p $PSPATH
+		}
+		march=$(uname -m)
+
+		case $march in
+		"i686")
+			march="i386"
+			;;
+		"x86_64")
+			march="amd64"
+			;;
+		"armv6l"|"arm6l")
+			march="arm"
+			;;
+		esac
+
+		$CURL -k ${PEERSTREAMERBIN}${march}/$PSPROG -o $PSPATH$PSPROG
+		chmod 0755 $PSPATH$PSPROG
+
+		# Adding version hash to file
+		COMMUNITY=Clommunity
+		REPOSITORY=build-peerstreamer
+		mkdir -p /etc/cloudy
+		$CURL -k https://api.github.com/repos/$COMMUNITY/$REPOSITORY/git/refs/heads/master | grep 'sha'|awk -F':' '{print $2}'|awk -F'"' '{print $2}' > /etc/cloudy/${COMMUNITY}-${REPOSITORY}.sha
+	fi
+}
+
+isInstalledLibav() {
+	if [ $(dpkg-query -W -f='${Status} ${Version}\n' libav-tools | cut -d " " -f1) = "install" ]
+	then
+		doDebug "libav-tools is already installed"
+		return 1
+	fi
+	doDebug "libav-tools is not installed"
+	return 0
+}
+
+# Check whether vlc (no X) is installed or not. If 0, it needs to be installed
+isInstalledVLC() {
+	if [ $(dpkg-query -W -f='${Status} ${Version}\n' vlc-nox | cut -d " " -f1) = "install" ]
+	then
+		doDebug "vlc-nox is already installed."
+		return 1
+	fi
+	doDebug "vlc-nox is not installed."
+	return 0
+}
+
+doInstallVLCplugin() {
+	if isInstalledVLCplugin
+	then
+		doDebug "Installing VLC browser plugin..."
+		apt-get install -y --force-yes browser-plugin-vlc
+	fi
+}
+
+isInstalledVLCplugin() {
+	if [ $(dpkg-query -W -f='${Status} ${Version}\n' browser-plugin-vlc | cut -d " " -f1) = "install" ]
+	then
+		doDebug "browser-plugin-vlc is already installed."
+		return 1
+	fi
+	doDebug "browser-plugin-vlc is not installed."
+	return 0
+}
+
+# Check install
+isInstall(){
+	[ -f $PSPATH$PSPROG ] && return 0
+	doDebug "PeerStreamer is not installed. Installing now..."
+	return 1
+}
+
+doRemove() {
+	rm -rf /opt/peerstreamer
+}
+
+findRandFreePort() {
+	read lowerPort upperPort < /proc/sys/net/ipv4/ip_local_port_range
+	rannum=$(( RANDOM % $(( $upperPort - $lowerPort))  ))
+	for (( contador = lowerPort ; contador <= upperPort ; contador++ )); do
+	      port=$(( $contador + $rannum ))
+	      [ $port -gt $upperPort ] && port=$(( $port - $upperPort + $lowerPort )) 
+	      $LSOF -i -n|awk '{print $9}'|cut -d "-" -f 1|grep -q ":${port}"
+	      [ $? -eq 1 ] && { lp=$port; break; }
+	done
+	[ $lp = 0 ] && { echo "no free local ports available"; return 2; }
+	echo $lp
+}
+
+if [ $# -lt 1 ]
+then
+	doHelp
+fi
+
+case $1 in
+	"publish")
+		checkPrograms
+		shift
+		doPeerSource "$@"
+		;;
+	"unpublish")
+		checkPrograms
+		shift
+		doStopPeerSource $@
+		;;
+	"connectrtsp")
+		checkPrograms
+		shift
+		doPeer2RTSPServer $@
+		;;
+	"connectudp")
+		checkPrograms
+		shift
+		doPeer2UDPClient $@
+		;;
+	"disconnect")
+		checkPrograms
+		shift
+		doStopPeerSource $@
+		;;
+	"install")
+		shift
+		doInstall $@
+		;;
+	"installVLCplugin")
+		shift
+		doInstallVLCplugin $@
+		;;
+	"info")
+		shift
+		doInfo $@
+		;;
+	"uninstall")
+		shift
+		doRemove $@
+		;;
+esac

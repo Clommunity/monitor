@@ -1,0 +1,73 @@
+#!/bin/bash
+#HAndler for clearEInfo
+#
+SERFBIN="/opt/serf/serf"
+SERF_CONFIGFILE="/etc/avahi-ps-serf.conf"
+SERFTAG="services"
+SERFETAG="extraInfo"
+SERFSTATUS="alive"
+LOGFILE="/tmp/avahi-ps-serf.log"
+AVAHISERF="/usr/share/avahi-ps/plugs/avahi-ps-serf"
+
+#Loading configuration
+[[ -f $SERF_CONFIGFILE ]] && . $SERF_CONFIGFILE
+
+#Loading avahi-ps-serf functions
+[[ -f $AVAHISERF ]] || err "\"$AVAHISERF\" not available"
+. "$AVAHISERF"
+
+## How do we clear ETAG?
+
+ETAG=($(getMyEServices))
+
+## Getting Payload as stdin
+Payload=""
+while read line; do
+  Payload=$Payload$line
+done < /dev/stdin
+
+## Payload will be some JSON obj 
+# that may contain relevant stuff
+#Payload=$(echo "$Payload"|jq -c .)
+#such as: full clean
+# or by time/until date 
+# default will clean all except those that do not have ttime
+
+tmph=""
+net=()
+
+#Get h value
+hname() {
+	local _h
+	_h=$1
+	echo "$_h" | jq -c ".h"
+}
+
+## clears V only those without TTime stay in array
+txt=""
+for h in "${ETAG[@]}"
+do
+	vempt=$(echo "$h" | jq .v[])
+        if [ -z "$vempt" ]; then
+         #No need for this h to appear anymore
+         continue
+        fi
+        lastv=$(lastVWithoutTTime "$h")
+	if [ ! -z "$lastv" ]
+        then
+	tmph='{"h":'$(hname "$h")',"v":['"$lastv"']}'
+	else
+	#No need for empty v
+	continue
+	fi
+
+	if [ -z "$txt" ]; then
+		txt="$tmph"
+	else
+		txt="$txt"",""$tmph"
+	fi
+done
+
+$SERFBIN tags -set ${SERFETAG}=$(echo "["$txt"]" | comprimir)
+
+##It should have been finished

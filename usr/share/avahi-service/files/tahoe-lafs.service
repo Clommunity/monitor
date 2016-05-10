@@ -1,0 +1,144 @@
+#!/bin/sh
+#TAHOE file
+
+TAHOE_PATH=/var/lib/tahoe-lafs
+INTRODUCER_DIR=introducer
+PROGRAM=/usr/sbin/avahi-ps
+NAME=$(basename $0|sed -n 's/\(.*\).service/\1/p')
+DESCRIPTION="Tahoe-LAFS-Grid"
+TYPE="tahoe-lafs"
+PID_FILE="/var/lib/tahoe-lafs/introducer/twistd.pid"
+GRID_NAME_FILE="/var/lib/tahoe-lafs/introducer/grid.name"
+INTRODUCER_PUBLIC_FILE="/var/lib/tahoe-lafs/introducer/introducer.public"
+INTRODUCER_FURL="/var/lib/tahoe-lafs/introducer/introducer.furl"
+INTRODUCER_PORT="/var/lib/tahoe-lafs/introducer/introducer.port"
+WEB_PORT="/var/lib/tahoe-lafs/introducer/web.port"
+PORT=0
+TXT=""
+SERFSCR="/usr/share/avahi-ps/plugs/avahi-ps-serf"
+NODE_PATH="/var/lib/tahoe-lafs/node"
+N=""
+
+
+nodeUpdate() {
+	#just updating information of the node on SERF
+	[[ ! -f $SERFSCR ]] && return 4 || . "$SERFSCR"
+
+	if [[ "$2" == "docker" ]]; then
+	## docker version
+	 sid=$3
+	  node_pid=$(docker exec $sid cat $NODE_PATH"/twistd.pid")
+	  node_port=$(docker exec $sid cat $NODE_PATH"/client.port")
+	  node_id=$(docker exec $sid cat $NODE_PATH"/my_nodeid")
+	  gname=$(docker exec $sid cat $GRID_NAME_FILE)
+	  OPT='{"introducer.gname":"'$gname'"}'
+	
+	else
+	node_pid=$(cat $NODE_PATH"/twistd.pid")
+	node_port=$(cat $NODE_PATH"/client.port")
+	node_id=$(cat $NODE_PATH"/my_nodeid")
+	gname=$(cat $GRID_NAME_FILE)
+	OPT='{"introducer.gname":"'$gname'"}'
+	fi
+
+	if [ -z "$N" ]; then
+	stime=$(date +%s)
+	UPD='{"node.pid":"'$node_pid'","node.port":"'$node_port'","node.id":"'$node_id'","node.stime":"'$stime'"}'
+	else
+	ttime=$(date +%s)
+	UPD='{"node.port":"'$node_port'","node.id":"'$node_id'","node.ttime":"'$ttime'"}'
+	fi
+
+	serf_update_service $TYPE $(cat $INTRODUCER_PORT) "$UPD" "$OPT"
+
+}
+
+getJSONEinfo() {
+	echo $(/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh gather_information tahoe-lafs | jq -c .)
+}
+
+start()
+{
+        echo "Start $NAME"
+	#Because it was not initializing
+	check
+        if [ -f $GRID_NAME_FILE ] ; then
+                DESCRIPTION=$(cat $GRID_NAME_FILE)
+        fi
+	if [ -z "$TXT" ]; then
+	TXT="einfo="$(echo "$(getJSONEinfo)"|tr "," ";")
+	else
+	TXT="einfo="$(echo "$(getJSONEinfo)"|tr "," ";")","$TXT
+	fi
+
+        $PROGRAM publish $DESCRIPTION $TYPE $PORT "$TXT"
+}
+
+stop()
+{
+        echo "Stop $NAME"
+	#Because it was not initializing
+	check
+        $PROGRAM unpublish $TYPE $PORT
+}
+
+check()
+{
+  # Test directorys and files
+  [ ! -d "$TAHOE_PATH" ] && return 2
+  [ ! -d "$TAHOE_PATH/$INTRODUCER_DIR" ] && return 2
+  [ ! -f "$TAHOE_PATH/$INTRODUCER_DIR/introducer.port" ] && return 2 || PORT=$(cat /var/lib/tahoe-lafs/introducer/introducer.port)
+  [ ! -f "$TAHOE_PATH/$INTRODUCER_DIR/my_nodeid" ] && return 2 || TXT=$(cat /var/lib/tahoe-lafs/introducer/my_nodeid)
+
+
+  # Check for PID file
+  [ ! -f $PID_FILE ] && return 1
+
+  # Check por process
+  ps -p $(cat $PID_FILE) > /dev/null
+
+  # Check port
+  netstat -anlt | grep $PORT | grep -q LISTEN  || return 1
+
+	#Check if public
+  [ ! -f $INTRODUCER_PUBLIC_FILE ] && return 1
+
+  return 0
+}
+
+case "$1" in
+  json)
+    getJSONEinfo
+  ;;
+  start)
+    start
+  ;;
+  stop)
+    stop
+  ;;
+  check)
+    check; c=$?
+    case $c in 
+      0) start
+      ;;
+      1) stop
+      ;;
+    esac
+  ;;
+  isActive)
+    echo -n "$NAME "
+    check && (echo "UP"; exit 0) || (echo "DOWN";exit 1)
+  ;;
+  nodeStart)
+    nodeUpdate $@
+  ;;
+  nodeStop)
+    N=1
+    nodeUpdate $@
+  ;;
+  *)
+    exit 1
+  ;;
+esac
+
+exit 0
