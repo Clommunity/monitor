@@ -51,4 +51,7 @@ install:
 	install -m 0755 var/local/cDistro/lang/*.menus.php $(INSTALLDIR)/var/local/cDistro/lang/
 	install -m 0755 var/local/cDistro/config/global.php $(INSTALLDIR)/var/local/cDistro/config/
 	@echo "Cloudy updated"
+	
+	/bin/bash /var/local/cDistro/plug/resources/monitor-aas/common.sh install-cron
+	@echo "Cron job created for auto-update monitor"
 .PHONY: all clean install
