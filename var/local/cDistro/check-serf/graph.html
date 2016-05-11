@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Analisis</title>
+		<script src="js/Chart.js"></script>
+    <script src="js/Chart.StackedBar.js"></script>
+		<meta name = "viewport" content = "initial-scale = 1, user-scalable = no">
+		<script src="js/sql.js"></script>
+		<script src="js/bzip2.js"></script>
+		<style>
+			canvas{ }
+			h1 { text-align: center; }
+		</style>
+	</head>
+	<body>
+		<div style="width: 60%">
+			<h1 id="IPNode">10.139.40.82</h1>
+			<p id="extra"></p>
+		</div>
+		<div style="width: 60%">
+			<canvas id="canvas" height="450" width="600"></canvas>
+		</div>
+		<div style="width: 60%">
+			<canvas id="canvas2" height="450" width="600"></canvas>
+		</div>
+  </body>
+</html>
+<script>
+function bin2Array(bin) {
+		'use strict';
+		var i, size = bin.length, ary = [];
+		for (i = 0; i < size; i++) {
+				ary.push(bin.charCodeAt(i) & 0xFF);
+		}
+		return ary;
+}
+function timpstamp2str(ts){
+	var date = new Date(ts*1000);
+	var day = date.getDate();
+	var month = date.getMonth()+1;
+	var year = date.getFullYear();
+	var hours = date.getHours();
+	var minutes = "0" + date.getMinutes();
+	var seconds = "0" + date.getSeconds();
+	var formattedTime = day + "/" + month + "/" + year + " " + hours + ':' + minutes.substr(-2) + ':' + seconds.substr(-2);
+	return formattedTime;
+}
+var xhr = new XMLHttpRequest();
+xhr.open('GET', 'db/neighbours.db.bz2', true);
+//xhr.open('GET', 'db/neighbours.db', true);
+xhr.responseType = 'arraybuffer';
+
+xhr.onload = function(e) {
+  var uInt8Array = new Uint8Array(this.response);
+	var dades = bin2Array(bzip2.simple(bzip2.array(uInt8Array)));
+  var db = new SQL.Database(dades);
+  var alive = [];
+  var failed = [];
+  var label = [];
+  var contents = db.exec("select timestamp,status, count(status) from neigh group by timestamp, status limit 50;");
+  var tmpextra = db.exec("select timestamp,extra, count(extra) from extra group by timestamp");
+  //console.log(contents);
+	console.log(tmpextra);
+  var extra_values = tmpextra[0].values;
+  var t = 0;
+  var t2=0;
+  var tt;
+  var extraText = "";
+  for (t in extra_values) {
+	//extraText += extra_values[t][1] + "<br>";
+	for (t2 in extra_values[t]) {
+ 		extraText += extra_values[t][t2] + "<br>"
+	}
+	extraText += "<br>";
+  }
+ document.getElementById("extra").innerHTML = extraText;
+  values =  contents[0].values;
+  var l = 0;
+  for (i in values){
+      if (values[i][1] == "alive")
+        alive.push(values[i][2]);
+      else
+        failed.push(values[i][2]);
+      if (l !=  values[i][0]) {
+				l = values[i][0];
+        label.push(timpstamp2str(l));
+      }
+  }
+  var ChartEData = {
+   labels : label,
+		datasets : [
+			{
+				fillColor : "rgba (220,220,120,0.5)",
+                                strokeColor : "rgba(220,220,120,0.5)",
+                                pointColor : "rgba(220,220,120,1)",
+                                pointStrokeColor : "#fff",
+                                label:  'alive',
+				data : ealive
+			}
+	]
+
+   }
+
+
+  var ChartData = {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba (220,220,120,0.5)",
+				strokeColor : "rgba(220,220,120,0.5)",
+				pointColor : "rgba(220,220,120,1)",
+				pointStrokeColor : "#fff",
+				label:	'failed',
+				data : failed
+			},
+			{
+				fillColor : "rgba(151,187,205,0.5)",
+				strokeColor : "rgba(151,187,205,0.5)",
+				pointColor : "rgba(151,187,205,0.7)",
+				pointStrokeColor : "#fff",
+				label: 'alive',
+				data : alive
+			}
+		]
+
+	}
+	var cte = document.getElementById("canvas2").getContext("2d");
+	var grafice = new Chart(ctx).StackedBar(ChartEData, {
+		multiTooltipTemplate: "<%= value %><%if (datasetLabel){%> <%=datasetLabel%><%}%>",
+		responsive : true
+	});
+	var ctx = document.getElementById("canvas").getContext("2d");
+	var grafic = new Chart(ctx).StackedBar(ChartData, {
+		multiTooltipTemplate: "<%= value %><%if (datasetLabel){%> <%=datasetLabel%><%}%>",
+		responsive : true
+	});
+}
+xhr.send();
+</script>

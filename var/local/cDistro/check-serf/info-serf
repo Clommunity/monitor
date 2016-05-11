@@ -1,0 +1,5 @@
+# info_Serf 
+#
+#
+12 *  * * *   root    [ -x /var/www/check-serf/info_serf.sh ] && cd /var/www/check-serf/ && ./info_serf.sh > /dev/null 2>&1
+

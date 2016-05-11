@@ -1,0 +1,319 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Analisis</title>
+		<script src="js/Chart.js"></script>
+		<meta name = "viewport" content = "initial-scale = 1, user-scalable = no">
+		<script src="js/sql.js"></script>
+		<script src="js/bzip2.js"></script>
+		<style>
+			canvas{ }
+			h1 { text-align: center; }
+		</style>
+	</head>
+	<body>
+		<div id="line-chart-legend-alive"></div>
+		<div style="width: 1000px">
+			<canvas id="canvas-alive" height="450" width="1000"></canvas>
+		</div>
+		<div id="line-chart-legend-syncthing"></div>
+		<div style="width: 1000px">
+			<canvas id="canvas-syncthing" height="450" width="1000"></canvas>
+		</div>
+		<div id="line-chart-legend-dns"></div>
+		<div style="width: 1000px">
+			<canvas id="canvas-dns" height="450" width="1000"></canvas>
+		</div>
+
+  </body>
+</html>
+<script>
+function bin2Array(bin) {
+		'use strict';
+		var i, size = bin.length, ary = [];
+		for (i = 0; i < size; i++) {
+				ary.push(bin.charCodeAt(i) & 0xFF);
+		}
+		return ary;
+}
+function timpstamp2str(ts){
+	var date = new Date(ts*1000);
+	var day = date.getDate();
+	var month = date.getMonth()+1;
+	var year = date.getFullYear();
+	var hours = date.getHours();
+	var minutes = "0" + date.getMinutes();
+	var seconds = "0" + date.getSeconds();
+	var formattedTime = day + "/" + month + "/" + year + " " + hours + ':' + minutes.substr(-2) + ':' + seconds.substr(-2);
+	var formattedTime = day + "/" + month + "/" + year;
+	return formattedTime;
+}
+
+function rgb2hex(rgb){
+ rgb = rgb.match(/^rgba?[\s+]?\([\s+]?(\d+)[\s+]?,[\s+]?(\d+)[\s+]?,[\s+]?(\d+)[\s+]?/i);
+ return (rgb && rgb.length === 4) ? "#" +
+  ("0" + parseInt(rgb[1],10).toString(16)).slice(-2) +
+  ("0" + parseInt(rgb[2],10).toString(16)).slice(-2) +
+  ("0" + parseInt(rgb[3],10).toString(16)).slice(-2) : '';
+}
+var xhr = new XMLHttpRequest();
+xhr.open('GET', 'db/neighbours.db.bz2', true);
+//xhr.open('GET', 'db/_neighbours.db', true);
+xhr.responseType = 'arraybuffer';
+
+xhr.onload = function(e) {
+	var ts_start = 1440460800;  // 25/08/2015
+	var ts_end = 1443225599;  // 25/08/2015
+  var uInt8Array = new Uint8Array(this.response);
+	var dades = bin2Array(bzip2.simple(bzip2.array(uInt8Array)));
+  var db = new SQL.Database(dades);
+  var alive = [];
+  var label = [];
+	var dns = [];
+	var owp = [];
+	var proxy = [];
+	var serf = [];
+	var snp = [];
+	var syncthing = [];
+	var peer = [];
+
+	var val_sql;
+	var between_date=" and timestamp between " + ts_start + " and " + ts_end + " ";
+
+  // Prepare labels
+	val_sql = db.exec("select timestamp from neigh where status = 'alive' " + between_date + " group by timestamp;");
+	values =  val_sql[0].values
+	this_day = "";
+  for (i in values){
+				f = timpstamp2str(values[i][0]);
+				day = (f == this_day) ? "" : f;
+        label.push(day);
+				this_day = f;
+  }
+
+
+  val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + " group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        alive.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%DNSService%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        dns.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%owp%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        owp.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%proxy%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        proxy.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%serf%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        serf.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%snp%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        snp.push(values[i][1]);
+  }
+
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%syncthing%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        syncthing.push(values[i][1]);
+  }
+	val_sql = db.exec("select timestamp,count(*) from neigh where status = 'alive'" + between_date + "and services like '%peer%' group by timestamp;");
+  values =  val_sql[0].values
+  for (i in values){
+        peer.push(values[i][1]);
+  }
+
+
+	var datacolor={"781678":"On-line", "97BBCD":"SERF", "787816":"DNS", "167878":"Proxy", "78DC78":"Graph Server", "E53D00":"Syncthing", "7878DC":"PeerStreamer", "DC7878":"OpenVZ Web Panel"};
+
+
+
+  var ChartData_alive= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(120,22,120,1)",
+				pointColor : "rgba(120,22,120,1)",
+				pointStrokeColor : "#fff",
+				label: 'alive',
+				data : alive
+			}
+		]
+	};
+	var ChartData_dns= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(120,120,22,1)",
+				pointColor : "rgba(120,120,22,1)",
+				pointStrokeColor : "#fff",
+				label:	'dns',
+				data : dns
+			}
+		]
+	};
+	var ChartData_owp= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(220,120,120,1)",
+				pointColor : "rgba(220,120,120,1)",
+				pointStrokeColor : "#fff",
+				label: 'owp',
+				data : owp
+			}
+		]
+	};
+	var ChartData_proxy= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(22,120,120,1)",
+				pointColor : "rgba(22,120,120,1)",
+				pointStrokeColor : "#fff",
+				label: 'proxy',
+				data : proxy
+			}
+		]
+	};
+	var ChartData_serf= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(151,187,205,1)",
+				pointColor : "rgba(151,187,205,1)",
+				pointStrokeColor : "#fff",
+				label: 'serf',
+				data : serf
+			}
+		]
+	};
+	var ChartData_snp= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(120,220,120,1)",
+				pointColor : "rgba(120,220,120,1)",
+				pointStrokeColor : "#fff",
+				label: 'snp',
+				data : snp
+			}
+		]
+	};
+	var ChartData_syncthing= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(229, 61, 0,1)",
+				pointColor : "rgba(229, 61, 0,1)",
+				pointStrokeColor : "#fff",
+				label: 'syncthing',
+				data : syncthing
+			}
+		]
+	};
+	var ChartData_peer= {
+    labels : label,
+		datasets : [
+			{
+				fillColor : "rgba(0,0,0,0)",
+				strokeColor : "rgba(120,120,220,1)",
+				pointColor : "rgba(120,120,220,1)",
+				pointStrokeColor : "#fff",
+				label: 'peerstreamer',
+				data : peer
+			}
+		]
+	}
+
+// Online
+	var legend ="<ul style=\"list-style-type: none;margin: 0;padding: 0;\">";
+
+	for (var k in datacolor){
+		if (datacolor[k]=='On-line') {
+			legend += "<li style=\"display: inline;float: left;\"><div style=\"background-color: #" + k  + "; height: 20px; width: 20px; margin 5px;float:left\"></div><div style=\"margin-left: 5px; margin-right: 20px;display:inline\">"+datacolor[k]+"</div></li>"
+		}
+	}
+	legend += "</ul>";
+
+	document.getElementById("line-chart-legend-alive").innerHTML = legend;
+
+	var ctx = document.getElementById("canvas-alive").getContext("2d");
+	var grafic = new Chart(ctx).Line(ChartData_alive, {
+		bezierCurve: false,
+		multiTooltipTemplate: "<%= value %><%if (datasetLabel){%> <%=datasetLabel%><%}%>",
+		responsive : true,
+		pointDotRadius : 3,
+		pointDot : true,
+		animation: false,
+	});
+
+// Syncthing
+	var legend ="<ul style=\"list-style-type: none;margin: 0;padding: 0;\">";
+
+	for (var k in datacolor){
+		if (datacolor[k]=='Syncthing') {
+			legend += "<li style=\"display: inline;float: left;\"><div style=\"background-color: #" + k  + "; height: 20px; width: 20px; margin 5px;float:left\"></div><div style=\"margin-left: 5px; margin-right: 20px;display:inline\">"+datacolor[k]+"</div></li>"
+		}
+	}
+	legend += "</ul>";
+
+	document.getElementById("line-chart-legend-syncthing").innerHTML = legend;
+
+	var ctx = document.getElementById("canvas-syncthing").getContext("2d");
+	var grafic = new Chart(ctx).Line(ChartData_syncthing, {
+		bezierCurve: false,
+		multiTooltipTemplate: "<%= value %><%if (datasetLabel){%> <%=datasetLabel%><%}%>",
+		responsive : true,
+		pointDotRadius : 3,
+		pointDot : true,
+		animation: false,
+	});
+
+	// DNS
+		var legend ="<ul style=\"list-style-type: none;margin: 0;padding: 0;\">";
+
+		for (var k in datacolor){
+			if (datacolor[k]=='DNS') {
+				legend += "<li style=\"display: inline;float: left;\"><div style=\"background-color: #" + k  + "; height: 20px; width: 20px; margin 5px;float:left\"></div><div style=\"margin-left: 5px; margin-right: 20px;display:inline\">"+datacolor[k]+"</div></li>"
+			}
+		}
+		legend += "</ul>";
+
+		document.getElementById("line-chart-legend-dns").innerHTML = legend;
+
+		var ctx = document.getElementById("canvas-dns").getContext("2d");
+		var grafic = new Chart(ctx).Line(ChartData_dns, {
+			bezierCurve: false,
+			multiTooltipTemplate: "<%= value %><%if (datasetLabel){%> <%=datasetLabel%><%}%>",
+			responsive : true,
+			pointDotRadius : 3,
+			pointDot : true,
+			animation: false,
+		});
+}
+xhr.send();
+</script>
