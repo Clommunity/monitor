@@ -11,6 +11,8 @@ $install_script="https://raw.githubusercontent.com/Clommunity/monitor/master/get
 function _installed_monitor_aas(){
 	global $webpage, $script;
 	
+	//@FIX: Because we dont have GUI yet
+	return is_file($script);
 	//$webpage and $script need to be installed!
 	return (is_file($webpage) && is_file($script));
 
