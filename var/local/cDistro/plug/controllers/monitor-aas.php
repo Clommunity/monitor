@@ -56,7 +56,7 @@ function install() {
 	
 	if(!_installed_monitor_aas()) {
 	  //Just to make sure we get the install script error!
-	 $cmd = "cd /tmp/ && mkdir -d monitor_inst && cd monitor_inst";
+	 $cmd = "cd /tmp/ && mkdir monitor_inst && cd monitor_inst";
 	 execute_program_shell($cmd)['output'];
 
 	 $cmd = "cd /tmp/monitor_inst/ && curl -k  ".$install_script." | sh - 2>&1";
