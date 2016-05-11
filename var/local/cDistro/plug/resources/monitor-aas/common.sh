@@ -276,6 +276,98 @@ status() {
 	echo $avahi_extra
 }
 
+aupdate() {
+	#auto-updates the monitor scripts/cloudy
+	local upd
+	## upd non empty means install
+	upd=$1
+
+	GH_USER=Clommunity
+	GH_REPO=monitor
+	NAME=monitor
+	
+	REF=`curl -s https://api.github.com/repos/$GH_USER/$GH_REPO/git/refs/heads/master | grep 'sha'|awk -F':' '{print $2}'|awk -F'"' '{print $2}'`
+	
+	CREF=`[ -e /etc/cloudy/${GH_USER}-${GH_REPO}.sha ] && cat /etc/cloudy/${GH_USER}-${GH_REPO}.sha`
+
+	[ ! -z "${CREF}" ] && [ "${CREF}" == "${REF}" ] && echo "No update necessary" && exit
+	
+	echo "Updating Monitor to $REF"
+	
+	if [ ! -z "${upd}" ]; then
+		# this will update by install
+		echo "Doing by Install"
+	
+	exit
+	fi
+	
+	echo "Doing by Diff"
+	# we will diff and files and update instead of install
+	cd /tmp/
+	TMPDIR=`mktemp -d monitor.upd-XXXX` && {
+		cd $TMPDIR
+		curl -k "https://codeload.github.com/${GH_USER}/${GH_REPO}/zip/master" > ${GH_REPO}.zip
+		unzip ${GH_REPO}.zip
+		apply_diff "/tmp/$TMPDIR" ${GH_REPO}
+		cd ..
+		rm -rf $TMPDIR
+	}
+
+	echo "Update has been done."
+	echo ${REF} > /etc/cloudy/${GH_USER}-${GH_REPO}.sha
+	/etc/init.d/serf stop
+	/etc/init.d/serf start
+
+	echo "Done"
+}
+
+apply_diff(){
+	## Will create diff files and apply them
+	local GH_REPO
+	local dir
+	dir=$1
+	GH_REPO=$2
+
+	TEMP="-s"	#--dry-run
+	
+	# List of files
+	files=(`find "${GH_REPO}-master/var" -type f`)
+	files+=(`find "${GH_REPO}-master/usr" -type f`)
+	files+=(`find "${GH_REPO}-master/etc" -type f`)
+	### only files in var/ usr/ etc/ needed
+
+	for f in ${files[@]}
+	do
+		#Diff for each file and create patch
+		#get the file to compare
+		cf=`echo ${f} | sed "s%${GH_REPO}-master%%g"`
+		fn=`basename ${f}`
+		diff -u ${cf} ${f} > ${fn}.patch
+
+		## now that we have the patch, apply it
+		patch $TEMP -p2 ${cf} < ${fn}.patch
+
+		echo "File ${cf} patched."
+	done
+
+}
+
+install_cron() {
+	cmd="@daily [ -e /var/local/cDistro/plug/resources/monitor-aas/common.sh ] && cd /var/local/cDistro/plug/resources/monitor-aas/ && /bin/bash common.sh auto-update > /dev/null 2>&1"
+
+	## add to crontab
+	cd /tmp
+	TMPDIR=`mktemp -d monitor-cron.XXX` && {
+		cd $TMPDIR
+		crontab -l > mycron
+		echo $cmd >> mycron
+		crontab mycron
+		cd ..
+		rm -rf $TMPDIR
+	}
+
+	echo "Cron job installed"
+}
 
 case "$1" in 
   cpu_usage_by_process)
@@ -293,6 +385,14 @@ case "$1" in
   enabled)
 	shift
 	status
+	;;
+  auto-update)
+	shift
+	aupdate $@
+	;;
+  install-cron)
+	shift
+	install_cron
 	;;
   *)
 	exit
