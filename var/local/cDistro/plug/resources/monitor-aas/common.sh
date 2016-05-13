@@ -289,8 +289,9 @@ aupdate() {
 	REF=`curl -s https://api.github.com/repos/$GH_USER/$GH_REPO/git/refs/heads/master | grep 'sha'|awk -F':' '{print $2}'|awk -F'"' '{print $2}'`
 	
 	CREF=`[ -e /etc/cloudy/${GH_USER}-${GH_REPO}.sha ] && cat /etc/cloudy/${GH_USER}-${GH_REPO}.sha`
-
-	[ ! -z "${CREF}" ] && [ "${CREF}" == "${REF}" ] && echo "No update necessary" && exit
+	
+	## not done like this anymore
+	#[ ! -z "${CREF}" ] && [ "${CREF}" == "${REF}" ] && echo "No update necessary" && exit
 	
 	echo "Updating Monitor to $REF"
 	
@@ -308,17 +309,51 @@ aupdate() {
 		cd $TMPDIR
 		curl -k "https://codeload.github.com/${GH_USER}/${GH_REPO}/zip/master" > ${GH_REPO}.zip
 		unzip ${GH_REPO}.zip
-		apply_diff "/tmp/$TMPDIR" ${GH_REPO}
+		[ "$(update_needed ${CREF} ${REF} /tmp/${TMPDIR}/${GH_REPO}-master)" == "1" ] && echo "Files need update." && apply_diff "/tmp/$TMPDIR" ${GH_REPO} || echo "No update needed"
 		cd ..
 		rm -rf $TMPDIR
 	}
 
-	echo "Update has been done."
 	echo ${REF} > /etc/cloudy/${GH_USER}-${GH_REPO}.sha
 	/etc/init.d/serf stop
 	/etc/init.d/serf start
+	echo "Auto-update is done"
+}
 
-	echo "Done"
+update_needed() {
+	local CREF
+	local REF
+	local dir
+	local need
+	## verifies if update is necessary
+	CREF=$1
+	REF=$2
+	dir=$3
+	## not only with the sha refs but also by looking if files were modified after install
+	need="0"
+
+	 # List of files
+        files=(`find "${dir}/var" -type f`)
+        files+=(`find "${dir}/usr" -type f`)
+        files+=(`find "${dir}/etc" -type f`)
+        ### only files in var/ usr/ etc/ needed
+
+        for f in ${files[@]}
+        do
+                #Diff for each file and create patch
+                #get the file to compare
+                cf=`echo ${f} | sed "s%${dir}%%g"`
+                fn=`basename ${f}`
+		PATCH=`diff -u ${cf} ${f}`
+		[ -z "${PATCH}" ] && continue
+
+		need="1"
+        done
+	
+	## Just to make sure
+	[ "${CREF}" == "${REF}" ] || need="1"
+
+	echo ${need}
 }
 
 apply_diff(){
